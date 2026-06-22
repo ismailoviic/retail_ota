@@ -9,8 +9,8 @@ const char* password = "IDS@2023";
 
 // --- OTA & GitHub Settings ---
 // Must be the RAW urls!
-const String versionUrl = "https://raw.githubusercontent.com/YourUsername/esp32-ota-firmware/main/version.txt";
-const String firmwareUrl = "https://raw.githubusercontent.com/YourUsername/esp32-ota-firmware/main/firmware.bin";
+const String versionUrl = "https://raw.githubusercontent.com/ismailoviic/retail_ota/main/version.txt";
+const String firmwareUrl = "https://raw.githubusercontent.com/ismailoviic/retail_ota/main/build/esp32.esp32.esp32/retail_ota.ino.bin";
 
 int currentVersion = 1; // The version currently running on the ESP32
 
