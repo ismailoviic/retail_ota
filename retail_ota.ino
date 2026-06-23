@@ -2,6 +2,7 @@
 #include <HTTPClient.h>
 #include <HTTPUpdate.h>
 #include <WiFiClientSecure.h>
+#include "Adafruit_VL53L0X.h"
 
 // --- WiFi Credentials ---
 const char* ssid = "ZTE_2.4G_XXPP6m";
@@ -15,12 +16,15 @@ const char* supabaseAnonKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJz
 const String versionUrl = "https://raw.githubusercontent.com/ismailoviic/retail_ota/main/version.txt";
 const String firmwareUrl = "https://raw.githubusercontent.com/ismailoviic/retail_ota/main/build/esp32.esp32.esp32/retail_ota.ino.bin";
 
-int currentVersion = 8; // The version currently running
+int currentVersion = 9; // The version currently running
 
-// --- Pin Allocations ---
-const int trigPin = 5;      
-const int echoPin = 18;     
+// --- Pin Allocations & Constants ---
 const int batteryPin = 34;  
+const float REF_VOLTAGE = 3.7; 
+const float VOLTAGE_DIVIDER_MULTIPLIER = 2.0; 
+
+// --- Sensor Object ---
+Adafruit_VL53L0X lox = Adafruit_VL53L0X();
 
 // --- Deep Sleep Settings ---
 #define uS_TO_S_FACTOR 1000000ULL  
@@ -32,9 +36,17 @@ void setup() {
 
   Serial.println("\n--- Waking up from Deep Sleep ---");
 
-  pinMode(trigPin, OUTPUT);
-  pinMode(echoPin, INPUT);
-  pinMode(batteryPin, INPUT);
+  // Ensure 12-bit ADC resolution for accurate battery reading
+  analogReadResolution(12);
+  
+  // Initialize VL53L0X sensor
+  if (!lox.begin()) {
+    Serial.println(F("Failed to boot VL53L0X! Check your wiring."));
+    // We don't halt here with while(1) because we still want it to go to sleep 
+    // and try again later, rather than freezing and draining the battery.
+  } else {
+    Serial.println(F("VL53L0X successfully initialized."));
+  }
 
   // 1. Read Sensors
   float distance = readDistance();
@@ -67,22 +79,21 @@ void loop() {
 }
 
 float readDistance() {
-  digitalWrite(trigPin, LOW);
-  delayMicroseconds(2);
-  digitalWrite(trigPin, HIGH);
-  delayMicroseconds(10);
-  digitalWrite(trigPin, LOW);
-  
-  long duration = pulseIn(echoPin, HIGH, 30000); 
-  if (duration == 0) return 999.0;               
-  
-  return duration * 0.0343 / 2.0;
+  VL53L0X_RangingMeasurementData_t measure;
+  lox.rangingTest(&measure, false); 
+
+  if (measure.RangeStatus != 4) {  
+    // Convert native millimeters to centimeters for the dashboard logic
+    return measure.RangeMilliMeter / 10.0;
+  } else {
+    return 999.0; // Out of range error value
+  }
 }
 
 float readBattery() {
   int rawADC = analogRead(batteryPin);
-  float measuredVoltage = (rawADC / 4095.0) * 3.3;
-  return measuredVoltage * 2.0; 
+  float pinVoltage = (rawADC / 4095.0) * REF_VOLTAGE;
+  return pinVoltage * VOLTAGE_DIVIDER_MULTIPLIER; 
 }
 
 void sendDataToSupabase(float distance, float battery, int version) {
@@ -94,9 +105,8 @@ void sendDataToSupabase(float distance, float battery, int version) {
   
   http.addHeader("Content-Type", "application/json");
   http.addHeader("apikey", supabaseAnonKey);
-  http.addHeader("Authorization", String("Bearer ") + supabaseAnonKey);
+  http.addHeader("Authorization", String("Bearer ") + String(supabaseAnonKey));
   
-  // JSON Payload now includes firmware_version
   String jsonPayload = "{\"distance\":" + String(distance, 2) + 
                        ",\"battery_voltage\":" + String(battery, 2) + 
                        ",\"firmware_version\":" + String(version) + "}";
