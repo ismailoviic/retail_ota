@@ -16,7 +16,7 @@ const char* supabaseAnonKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJz
 const String versionUrl = "https://raw.githubusercontent.com/ismailoviic/retail_ota/main/version.txt";
 const String firmwareUrl = "https://raw.githubusercontent.com/ismailoviic/retail_ota/main/build/esp32.esp32.esp32/retail_ota.ino.bin";
 
-int currentVersion = 9; // The version currently running
+int currentVersion = 10; // The version currently running
 
 // --- Pin Allocations & Constants ---
 const int batteryPin = 34;  
@@ -28,7 +28,7 @@ Adafruit_VL53L0X lox = Adafruit_VL53L0X();
 
 // --- Deep Sleep Settings ---
 #define uS_TO_S_FACTOR 1000000ULL  
-#define TIME_TO_SLEEP  10         // Sleep duration in seconds (10 sec)
+#define TIME_TO_SLEEP  600         // Sleep duration in seconds (10 minutes)
 
 void setup() {
   Serial.begin(115200);
