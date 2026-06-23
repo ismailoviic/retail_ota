@@ -11,7 +11,7 @@ const char* password = "3KkYfpUH";
 const String versionUrl = "https://raw.githubusercontent.com/ismailoviic/retail_ota/main/version.txt";
 const String firmwareUrl = "https://raw.githubusercontent.com/ismailoviic/retail_ota/main/build/esp32.esp32.esp32/retail_ota.ino.bin";
 
-int currentVersion = 4; // Make sure to increment this in your new code before exporting the .bin!
+int currentVersion = 5; // Make sure to increment this in your new code before exporting the .bin!
 
 // --- Deep Sleep Settings ---
 #define uS_TO_S_FACTOR 1000000ULL  // Conversion factor for microseconds to seconds
