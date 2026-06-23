@@ -15,7 +15,7 @@ int currentVersion = 4; // Make sure to increment this in your new code before e
 
 // --- Deep Sleep Settings ---
 #define uS_TO_S_FACTOR 1000000ULL  // Conversion factor for microseconds to seconds
-#define TIME_TO_SLEEP  600         // Time ESP32 will go to sleep (in seconds) -> 600s = 10 minutes
+#define TIME_TO_SLEEP  300         // Time ESP32 will go to sleep (in seconds) -> 600s = 10 minutes
 
 void setup() {
   Serial.begin(115200);
