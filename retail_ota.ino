@@ -12,7 +12,7 @@ const char* password = "3KkYfpUH";
 const String versionUrl = "https://raw.githubusercontent.com/ismailoviic/retail_ota/main/version.txt";
 const String firmwareUrl = "https://raw.githubusercontent.com/ismailoviic/retail_ota/main/build/esp32.esp32.esp32/retail_ota.ino.bin";
 
-int currentVersion = 2; // Updated to Version 2!
+int currentVersion = 3; // Updated to Version 2!
 
 // --- Timer Settings ---
 unsigned long previousOtaMillis = 0;
