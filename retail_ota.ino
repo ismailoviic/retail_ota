@@ -7,57 +7,114 @@
 const char* ssid = "ZTE_2.4G_XXPP6m";
 const char* password = "3KkYfpUH";
 
+// --- Supabase Credentials ---
+const char* supabaseUrl = "https://yvgsorxwofgpkshlczlm.supabase.co/rest/v1/sensor_data";
+const char* supabaseAnonKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inl2Z3Nvcnh3b2ZncGtzaGxjemxtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODIxOTc2ODgsImV4cCI6MjA5Nzc3MzY4OH0.MgrGm-zTR5DIv2rwmBH0S3rMEDUHA_0ol-Ej43lHBk8";
+
 // --- OTA & GitHub Settings ---
 const String versionUrl = "https://raw.githubusercontent.com/ismailoviic/retail_ota/main/version.txt";
 const String firmwareUrl = "https://raw.githubusercontent.com/ismailoviic/retail_ota/main/build/esp32.esp32.esp32/retail_ota.ino.bin";
 
-int currentVersion = 5; // Make sure to increment this in your new code before exporting the .bin!
+int currentVersion = 6; // The version currently running
+
+// --- Pin Allocations ---
+const int trigPin = 5;      
+const int echoPin = 18;     
+const int batteryPin = 34;  
 
 // --- Deep Sleep Settings ---
-#define uS_TO_S_FACTOR 1000000ULL  // Conversion factor for microseconds to seconds
-#define TIME_TO_SLEEP  300         // Time ESP32 will go to sleep (in seconds) -> 600s = 10 minutes
+#define uS_TO_S_FACTOR 1000000ULL  
+#define TIME_TO_SLEEP  60         // Sleep duration in seconds (1 minute)
 
 void setup() {
   Serial.begin(115200);
-  delay(1000); // Brief pause to let the Serial Monitor catch up after waking
-  
-  Serial.println("\n\n--- Waking up from Deep Sleep ---");
-  Serial.print("Current Firmware Version: ");
-  Serial.println(currentVersion);
+  delay(100);
 
-  // 1. Connect to WiFi
-  WiFi.begin(ssid, password);
-  Serial.print("Connecting to WiFi");
+  Serial.println("\n--- Waking up from Deep Sleep ---");
+
+  pinMode(trigPin, OUTPUT);
+  pinMode(echoPin, INPUT);
+  pinMode(batteryPin, INPUT);
+
+  // 1. Read Sensors
+  float distance = readDistance();
+  float batteryVoltage = readBattery();
   
-  // We add a timeout (retries) so the ESP32 doesn't stay awake forever draining the battery if the WiFi router is down
+  // 2. Connect to WiFi
+  WiFi.begin(ssid, password);
   int retries = 0;
   while (WiFi.status() != WL_CONNECTED && retries < 20) {
     delay(500);
-    Serial.print(".");
     retries++;
   }
 
-  // 2. Check for Updates if WiFi connected successfully
   if (WiFi.status() == WL_CONNECTED) {
-    Serial.println("\nConnected to WiFi!");
-    Serial.println("Checking GitHub for updates...");
+    // 3. Send Data to Supabase (Including Version)
+    sendDataToSupabase(distance, batteryVoltage, currentVersion);
+    
+    // 4. Check for OTA Updates
     checkForUpdates();
   } else {
-    Serial.println("\nFailed to connect to WiFi. Skipping update check.");
+    Serial.println("WiFi Connection Failed. Skipping Supabase and OTA.");
   }
 
-  // 3. Go back to sleep (Whether OTA failed, succeeded, or there were no updates)
+  // 5. Return to Deep Sleep
   goToDeepSleep();
 }
 
 void loop() {
-  // The loop is intentionally left empty. 
-  // Deep sleep restarts the ESP32 from setup() every single time it wakes up.
+  // Empty for deep sleep
+}
+
+float readDistance() {
+  digitalWrite(trigPin, LOW);
+  delayMicroseconds(2);
+  digitalWrite(trigPin, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(trigPin, LOW);
+  
+  long duration = pulseIn(echoPin, HIGH, 30000); 
+  if (duration == 0) return 999.0;               
+  
+  return duration * 0.0343 / 2.0;
+}
+
+float readBattery() {
+  int rawADC = analogRead(batteryPin);
+  float measuredVoltage = (rawADC / 4095.0) * 3.3;
+  return measuredVoltage * 2.0; 
+}
+
+void sendDataToSupabase(float distance, float battery, int version) {
+  WiFiClientSecure client;
+  client.setInsecure(); 
+
+  HTTPClient http;
+  http.begin(client, supabaseUrl);
+  
+  http.addHeader("Content-Type", "application/json");
+  http.addHeader("apikey", supabaseAnonKey);
+  http.addHeader("Authorization", String("Bearer ") + supabaseAnonKey);
+  
+  // JSON Payload now includes firmware_version
+  String jsonPayload = "{\"distance\":" + String(distance, 2) + 
+                       ",\"battery_voltage\":" + String(battery, 2) + 
+                       ",\"firmware_version\":" + String(version) + "}";
+  
+  int httpResponseCode = http.POST(jsonPayload);
+  
+  if (httpResponseCode > 0) {
+    Serial.printf("Supabase Push Success! Code: %d\n", httpResponseCode);
+  } else {
+    Serial.printf("Error pushing to Supabase: %s\n", http.errorToString(httpResponseCode).c_str());
+  }
+  http.end();
 }
 
 void checkForUpdates() {
+  Serial.println("Checking GitHub for updates...");
   WiFiClientSecure client;
-  client.setInsecure(); // Bypass SSL certificate validation
+  client.setInsecure(); 
 
   HTTPClient http;
   http.begin(client, versionUrl);
@@ -68,53 +125,24 @@ void checkForUpdates() {
     String payload = http.getString();
     int latestVersion = payload.toInt();
     
-    Serial.print("Latest version on GitHub: ");
-    Serial.println(latestVersion);
-    
     if (latestVersion > currentVersion) {
       Serial.println("New version found! Starting OTA update...");
-      performOTAUpdate(client);
+      t_httpUpdate_return ret = httpUpdate.update(client, firmwareUrl);
+      // If successful, ESP32 reboots here automatically.
     } else {
       Serial.println("Firmware is up to date.");
     }
   } else {
-    Serial.print("Failed to check version. HTTP Error: ");
-    Serial.println(httpCode);
+    Serial.println("Failed to check GitHub version.");
   }
   http.end();
 }
 
-void performOTAUpdate(WiFiClientSecure &client) {
-  t_httpUpdate_return ret = httpUpdate.update(client, firmwareUrl);
-
-  switch (ret) {
-    case HTTP_UPDATE_FAILED:
-      Serial.printf("HTTP_UPDATE_FAILED Error (%d): %s\n", httpUpdate.getLastError(), httpUpdate.getLastErrorString().c_str());
-      break;
-    case HTTP_UPDATE_NO_UPDATES:
-      Serial.println("HTTP_UPDATE_NO_UPDATES");
-      break;
-    case HTTP_UPDATE_OK:
-      Serial.println("HTTP_UPDATE_OK");
-      // The ESP32 automatically reboots itself upon a successful update.
-      // It will wake up as the NEW version, run setup(), realize it is up to date, and go to sleep.
-      break;
-  }
-}
-
 void goToDeepSleep() {
-  Serial.println("Going to sleep for 10 minutes...");
-  
-  // Best practice: disconnect WiFi and turn off the radio to ensure maximum power savings
+  Serial.println("Going to sleep...");
   WiFi.disconnect(true);
   WiFi.mode(WIFI_OFF);
-  
-  // Configure the wake up timer
   esp_sleep_enable_timer_wakeup(TIME_TO_SLEEP * uS_TO_S_FACTOR);
-  
-  // Ensure all Serial data is printed before cutting power
-  Serial.flush(); 
-  
-  // Enter deep sleep
+  Serial.flush();
   esp_deep_sleep_start();
 }
