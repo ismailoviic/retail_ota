@@ -4,26 +4,27 @@
 #include <WiFiClientSecure.h>
 
 // --- WiFi Credentials ---
-const char* ssid = "IDS SALE";
-const char* password = "IDS@2023";
+const char* ssid = "ZTE_2.4G_XXPP6m";
+const char* password = "3KkYfpUH";
 
 // --- OTA & GitHub Settings ---
-// Must be the RAW urls!
+// Using your raw GitHub URLs
 const String versionUrl = "https://raw.githubusercontent.com/ismailoviic/retail_ota/main/version.txt";
 const String firmwareUrl = "https://raw.githubusercontent.com/ismailoviic/retail_ota/main/build/esp32.esp32.esp32/retail_ota.ino.bin";
 
-int currentVersion = 1; // The version currently running on the ESP32
+int currentVersion = 2; // Updated to Version 2!
 
 // --- Timer Settings ---
-unsigned long previousMillis = 0;
-const long interval = 300000; // 5 minutes in milliseconds (5 * 60 * 1000)
+unsigned long previousOtaMillis = 0;
+const long otaInterval = 20000; // 5 minutes (5 * 60 * 1000 ms)
+
+unsigned long previousPrintMillis = 0;
+const long printInterval = 10000; // Print version every 10 seconds
 
 void setup() {
   Serial.begin(115200);
   Serial.println("Starting ESP32...");
-  Serial.print("Current Firmware Version: ");
-  Serial.println(currentVersion);
-
+  
   // Connect to WiFi
   WiFi.begin(ssid, password);
   Serial.print("Connecting to WiFi");
@@ -37,24 +38,30 @@ void setup() {
 void loop() {
   unsigned long currentMillis = millis();
 
-  // Check every 5 minutes
-  if (currentMillis - previousMillis >= interval) {
-    previousMillis = currentMillis;
+  // 1. Print the current version status every 10 seconds
+  if (currentMillis - previousPrintMillis >= printInterval) {
+    previousPrintMillis = currentMillis;
+    
+    Serial.print("updated, the current version is ");
+    Serial.println(currentVersion);
+  }
+
+  // 2. Check for GitHub updates every 5 minutes
+  if (currentMillis - previousOtaMillis >= otaInterval) {
+    previousOtaMillis = currentMillis;
 
     if (WiFi.status() == WL_CONNECTED) {
-      Serial.println("Checking for updates...");
+      Serial.println("Checking GitHub for updates...");
       checkForUpdates();
     } else {
       Serial.println("WiFi disconnected, skipping update check.");
     }
   }
-
-  // Your regular ESP32 code goes here...
 }
 
 void checkForUpdates() {
   WiFiClientSecure client;
-  client.setInsecure(); // Bypass SSL certificate validation for simplicity
+  client.setInsecure(); // Bypass SSL certificate validation
 
   HTTPClient http;
   http.begin(client, versionUrl);
@@ -65,14 +72,14 @@ void checkForUpdates() {
     String payload = http.getString();
     int latestVersion = payload.toInt();
     
-    Serial.print("Latest version on GitHub: ");
+    Serial.print("Latest version on GitHub a khay Ismail: ");
     Serial.println(latestVersion);
     
     if (latestVersion > currentVersion) {
       Serial.println("New version found! Starting OTA update...");
       performOTAUpdate(client);
     } else {
-      Serial.println("Firmware is up to date.");
+      Serial.println("Firmware is up to date. ya salaaaaam a ba Ismail");
     }
   } else {
     Serial.print("Failed to check version. HTTP Error: ");
@@ -82,7 +89,6 @@ void checkForUpdates() {
 }
 
 void performOTAUpdate(WiFiClientSecure &client) {
-  // ESPhttpUpdate handles the downloading and flashing of the .bin file
   t_httpUpdate_return ret = httpUpdate.update(client, firmwareUrl);
 
   switch (ret) {
@@ -94,7 +100,7 @@ void performOTAUpdate(WiFiClientSecure &client) {
       break;
     case HTTP_UPDATE_OK:
       Serial.println("HTTP_UPDATE_OK");
-      // The ESP32 will automatically reboot here upon successful update
+      // ESP32 automatically reboots upon success
       break;
   }
 }
