@@ -9,8 +9,11 @@
 // --- Pin Allocations & Constants ---
 const int batteryPin = 35; // Déplacé de 34 à 35
 const int pluginPin = 34;  // Nouvelle broche pour la détection USB
+// Modification : On garde le REF_VOLTAGE à 3.7 car la tension de la batterie est plus élevée, 
+// mais on ajoute un offset pour calibrer la mesure (0.1V en moins d'après votre retour)
 const float REF_VOLTAGE = 3.7;
 const float VOLTAGE_DIVIDER_MULTIPLIER = 2.0;
+const float VOLTAGE_CALIBRATION_OFFSET = -0.10; // Correction logicielle
 const int LED_PIN = 2;  // La LED bleue intégrée à l'ESP32
 
 // --- Supabase Credentials ---
@@ -21,7 +24,7 @@ const char* supabaseAnonKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJz
 const String versionUrl = "https://raw.githubusercontent.com/ismailoviic/retail_ota/main/version.txt";
 const String firmwareUrl = "https://raw.githubusercontent.com/ismailoviic/retail_ota/main/build/esp32.esp32.esp32/retail_ota.ino.bin";
 
-int currentVersion = 13; // Mise à jour de la version
+int currentVersion = 14; // Mise à jour de la version (v14)
 
 // --- Objects ---
 Adafruit_VL53L0X lox = Adafruit_VL53L0X();
@@ -66,7 +69,7 @@ void setup() {
     Serial.println(F("VL53L0X successfully initialized."));
   }
 
-  // 1. Read Sensors & Status
+  // 1. Read Sensors & Status (Avec Filtre Médian)
   float distance = readDistance();
   Serial.print("distance: ");
   Serial.println(distance);
@@ -89,8 +92,8 @@ void setup() {
   // Temps maximum (en secondes) pour essayer de se connecter au Wi-Fi connu
   wm.setConnectTimeout(15);
 
-  // Timeout de 5 minutes (300 secondes) pour le mode Point d'Accès (AP)
-  wm.setConfigPortalTimeout(300);
+  // NOUVEAUTÉ V14 : Timeout réduit à 3 minutes (180 secondes) pour le mode Point d'Accès (AP)
+  wm.setConfigPortalTimeout(180);
 
   // Fonction appelée si l'ESP32 bascule en mode AP
   wm.setAPCallback(configModeCallback);
@@ -98,17 +101,19 @@ void setup() {
   // Tente de se connecter au Wi-Fi mémorisé.
   // Si échec après 15s, crée un réseau Wi-Fi sécurisé
   if (!wm.autoConnect("AI Coffee", "12345678")) {
-    Serial.println("Timeout de 5 minutes atteint sans nouvelles credentials.");
-    // Si on arrive ici, le timeout de 5 minutes est passé sans succès.
-    // On force l'extinction de la LED et on part en veille infinie
+    Serial.println("Timeout de 3 minutes atteint sans nouvelles credentials.");
+    // NOUVEAUTÉ V14 : Auto-Recovery. Au lieu de s'éteindre infiniment,
+    // on l'endort juste pour le cycle normal (10 minutes) pour qu'il réessaie plus tard.
     digitalWrite(LED_PIN, LOW);
-
-    Serial.println("Passage en veille infinie (réveil manuel uniquement).");
+    Serial.println("Échec de la connexion. Retour en sommeil pour réessayer dans 10 minutes.");
+    
+    // On libère la RAM Wi-Fi avant de dormir
     WiFi.disconnect(true);
     WiFi.mode(WIFI_OFF);
     Serial.flush();
-    // En n'activant aucun timer de réveil, l'ESP32 dormira pour toujours
-    // jusqu'à ce que l'utilisateur coupe et remette l'alimentation via l'interrupteur.
+    
+    // Il se réveillera dans 10 minutes et retentera wm.autoConnect()
+    esp_sleep_enable_timer_wakeup(TIME_TO_SLEEP * uS_TO_S_FACTOR);
     esp_deep_sleep_start();
   }
 
@@ -131,21 +136,88 @@ void loop() {
   // Empty for deep sleep
 }
 
+// ========================================================
+// NOUVEAUTÉ V14 : Filtre Médian pour la Distance
+// ========================================================
 float readDistance() {
-  VL53L0X_RangingMeasurementData_t measure;
-  lox.rangingTest(&measure, false);
+  float readings[3];
+  int validCount = 0;
+  
+  // Prendre 3 lectures très rapides (espacées de 50ms)
+  for (int i = 0; i < 3; i++) {
+    VL53L0X_RangingMeasurementData_t measure;
+    lox.rangingTest(&measure, false); 
+    
+    // Si la lecture est valide (RangeStatus != 4)
+    if (measure.RangeStatus != 4) {
+      readings[validCount] = measure.RangeMilliMeter / 10.0; // Conversion en cm
+      validCount++;
+    }
+    delay(50); 
+  }
 
-  if (measure.RangeStatus != 4) {
-    return measure.RangeMilliMeter / 10.0;
+  // Si on n'a réussi aucune lecture valide
+  if (validCount == 0) return 999.0;
+
+  // Si on a 1 ou 2 lectures valides, on fait juste la moyenne simple
+  if (validCount < 3) {
+    float sum = 0;
+    for (int i = 0; i < validCount; i++) sum += readings[i];
+    return sum / validCount;
+  }
+
+  // Si on a 3 lectures valides, on calcule l'écart max
+  float diff1 = abs(readings[0] - readings[1]);
+  float diff2 = abs(readings[1] - readings[2]);
+  float diff3 = abs(readings[0] - readings[2]);
+  
+  // Tolérance de 1.5 cm
+  if (max(diff1, max(diff2, diff3)) <= 1.5) {
+    return (readings[0] + readings[1] + readings[2]) / 3.0;
   } else {
-    return 999.0;
+    // Écart trop grand (anomalie). On trie et on prend la médiane.
+    for(int i=0; i<2; i++) {
+      for(int j=i+1; j<3; j++) {
+        if(readings[i] > readings[j]) {
+          float temp = readings[i];
+          readings[i] = readings[j];
+          readings[j] = temp;
+        }
+      }
+    }
+    return readings[1]; // Retourne la valeur médiane
   }
 }
 
+// ========================================================
+// NOUVEAUTÉ V14 : Filtre Médian + Calibration pour la Batterie
+// ========================================================
 float readBattery() {
-  int rawADC = analogRead(batteryPin);
-  float pinVoltage = (rawADC / 4095.0) * REF_VOLTAGE;
-  return pinVoltage * VOLTAGE_DIVIDER_MULTIPLIER;
+  float voltageReadings[3];
+  
+  // Prendre 3 lectures rapides de l'ADC
+  for (int i = 0; i < 3; i++) {
+    int rawADC = analogRead(batteryPin);
+    float pinVoltage = (rawADC / 4095.0) * REF_VOLTAGE;
+    
+    // Appliquer le multiplicateur du pont diviseur ET l'offset de calibration
+    voltageReadings[i] = (pinVoltage * VOLTAGE_DIVIDER_MULTIPLIER) + VOLTAGE_CALIBRATION_OFFSET;
+    delay(10); 
+  }
+
+  // Trier les 3 valeurs pour trouver la médiane (Filtre pour éliminer le bruit électrique)
+  for(int i=0; i<2; i++) {
+    for(int j=i+1; j<3; j++) {
+      if(voltageReadings[i] > voltageReadings[j]) {
+        float temp = voltageReadings[i];
+        voltageReadings[i] = voltageReadings[j];
+        voltageReadings[j] = temp;
+      }
+    }
+  }
+  
+  // Retourner la valeur médiane
+  return voltageReadings[1];
 }
 
 bool readPluginStatus() {
