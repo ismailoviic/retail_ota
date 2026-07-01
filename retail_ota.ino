@@ -24,7 +24,7 @@ const char* supabaseAnonKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJz
 const String versionUrl = "https://raw.githubusercontent.com/ismailoviic/retail_ota/main/version.txt";
 const String firmwareUrl = "https://raw.githubusercontent.com/ismailoviic/retail_ota/main/build/esp32.esp32.esp32/retail_ota.ino.bin";
 
-int currentVersion = 14; // Mise à jour de la version (v14)
+int currentVersion = 15; // NOUVELLE VERSION DE DEBUG (V15)
 
 // --- Objects ---
 Adafruit_VL53L0X lox = Adafruit_VL53L0X();
@@ -32,7 +32,7 @@ Ticker ticker;
 
 // --- Deep Sleep Settings ---
 #define uS_TO_S_FACTOR 1000000ULL
-#define TIME_TO_SLEEP 600  // Sleep duration in seconds (10 minutes)
+#define TIME_TO_SLEEP 60  // MODIFIÉ : 60 secondes (1 minute) pour le debug
 
 // --- Fonctions pour la LED ---
 void tick() {
@@ -122,13 +122,31 @@ void setup() {
   digitalWrite(LED_PIN, LOW);  // Éteint la LED pour économiser la batterie
   Serial.println("Connecté au Wi-Fi avec succès !");
 
-  // 3. Send Data to Supabase (Now includes plug status)
-  sendDataToSupabase(distance, batteryVoltage, isPluggedIn, currentVersion);
-
-  // 4. Check for OTA Updates
+  // 3. Check for OTA Updates FIRST (Crucial pour pouvoir sortir du mode debug plus tard)
   checkForUpdates();
 
-  // 5. Return to Deep Sleep
+  // 4. Mode Debug "Live" : Boucle de 60 secondes d'envoi continu
+  Serial.println("Début de la session d'envoi en direct (60 secondes)...");
+  unsigned long startDebugTime = millis();
+  
+  // Tourne pendant 60 000 millisecondes (1 minute)
+  while (millis() - startDebugTime < 60000) {
+    // Lecture fraîche des capteurs
+    distance = readDistance();
+    batteryVoltage = readBattery();
+    isPluggedIn = readPluginStatus();
+    
+    Serial.print("Live Distance: "); Serial.println(distance);
+    
+    // Envoi à Supabase
+    sendDataToSupabase(distance, batteryVoltage, isPluggedIn, currentVersion);
+    
+    // Pause de 1 seconde (L'envoi HTTP prend déjà ~1.5s, on aura une donnée toutes les ~2.5s)
+    delay(1000);
+  }
+  Serial.println("Fin de la session live. Préparation au sommeil...");
+
+  // 5. Return to Deep Sleep (Pour 1 minute)
   goToDeepSleep();
 }
 
