@@ -7,13 +7,11 @@
 #include <Ticker.h>       // Permet de faire clignoter la LED sans utiliser delay()
 
 // --- Pin Allocations & Constants ---
-const int batteryPin = 35; // Déplacé de 34 à 35
-const int pluginPin = 34;  // Nouvelle broche pour la détection USB
-// Modification : On garde le REF_VOLTAGE à 3.7 car la tension de la batterie est plus élevée, 
-// mais on ajoute un offset pour calibrer la mesure (0.1V en moins d'après votre retour)
+const int batteryPin = 35; 
+const int pluginPin = 34;  
 const float REF_VOLTAGE = 3.7;
 const float VOLTAGE_DIVIDER_MULTIPLIER = 2.0;
-const float VOLTAGE_CALIBRATION_OFFSET = -0.10; // Correction logicielle
+const float VOLTAGE_CALIBRATION_OFFSET = -0.10; // Correction logicielle mesurée au multimètre
 const int LED_PIN = 2;  // La LED bleue intégrée à l'ESP32
 
 // --- Supabase Credentials ---
@@ -24,7 +22,7 @@ const char* supabaseAnonKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJz
 const String versionUrl = "https://raw.githubusercontent.com/ismailoviic/retail_ota/main/version.txt";
 const String firmwareUrl = "https://raw.githubusercontent.com/ismailoviic/retail_ota/main/build/esp32.esp32.esp32/retail_ota.ino.bin";
 
-int currentVersion = 15; // NOUVELLE VERSION DE DEBUG (V15)
+int currentVersion = 17; // VERSION DE PRODUCTION FINALE (V17)
 
 // --- Objects ---
 Adafruit_VL53L0X lox = Adafruit_VL53L0X();
@@ -32,17 +30,15 @@ Ticker ticker;
 
 // --- Deep Sleep Settings ---
 #define uS_TO_S_FACTOR 1000000ULL
-#define TIME_TO_SLEEP 60  // MODIFIÉ : 60 secondes (1 minute) pour le debug
+#define TIME_TO_SLEEP 600  // PRODUCTION MODE : 600 secondes (10 minutes) de sommeil
 
 // --- Fonctions pour la LED ---
 void tick() {
-  // Alterne l'état de la LED
   digitalWrite(LED_PIN, !digitalRead(LED_PIN));
 }
 
 void configModeCallback(WiFiManager* myWiFiManager) {
   Serial.println("Échec de connexion au Wi-Fi sauvegardé. Passage en mode AP (Portail Captif)...");
-  // Arrête le clignotement et allume la LED en fixe pour indiquer le mode AP
   ticker.detach();
   digitalWrite(LED_PIN, HIGH);
 }
@@ -53,13 +49,11 @@ void setup() {
 
   // Initialisation des broches
   pinMode(LED_PIN, OUTPUT);
-  pinMode(pluginPin, INPUT); // Configuration de la broche de détection USB
+  pinMode(pluginPin, INPUT); 
 
   Serial.println("\n--- Waking up from Deep Sleep ---");
 
-  // On démarre le clignotement rapide (0.2s) pour indiquer la recherche Wi-Fi
   ticker.attach(0.2, tick);
-
   analogReadResolution(12);
 
   // Initialize VL53L0X sensor
@@ -71,82 +65,46 @@ void setup() {
 
   // 1. Read Sensors & Status (Avec Filtre Médian)
   float distance = readDistance();
-  Serial.print("distance: ");
-  Serial.println(distance);
+  Serial.print("distance: "); Serial.println(distance);
   
   float batteryVoltage = readBattery();
-  Serial.print("batteryVoltage: ");
-  Serial.println(batteryVoltage);
+  Serial.print("batteryVoltage: "); Serial.println(batteryVoltage);
 
-  // Lecture de l'état de charge
   bool isPluggedIn = readPluginStatus();
-  Serial.print("isPluggedIn: ");
-  Serial.println(isPluggedIn ? "Yes" : "No");
+  Serial.print("isPluggedIn: "); Serial.println(isPluggedIn ? "Yes" : "No");
 
   // 2. Gestion Intelligente du Wi-Fi (WiFiManager)
   WiFiManager wm;
-
-  // Désactive les longs logs de debug dans la console
   wm.setDebugOutput(false);
-
-  // Temps maximum (en secondes) pour essayer de se connecter au Wi-Fi connu
   wm.setConnectTimeout(15);
-
-  // NOUVEAUTÉ V14 : Timeout réduit à 3 minutes (180 secondes) pour le mode Point d'Accès (AP)
-  wm.setConfigPortalTimeout(180);
-
-  // Fonction appelée si l'ESP32 bascule en mode AP
+  wm.setConfigPortalTimeout(180); // 3 minutes de timeout AP
   wm.setAPCallback(configModeCallback);
 
-  // Tente de se connecter au Wi-Fi mémorisé.
-  // Si échec après 15s, crée un réseau Wi-Fi sécurisé
   if (!wm.autoConnect("AI Coffee", "12345678")) {
     Serial.println("Timeout de 3 minutes atteint sans nouvelles credentials.");
-    // NOUVEAUTÉ V14 : Auto-Recovery. Au lieu de s'éteindre infiniment,
-    // on l'endort juste pour le cycle normal (10 minutes) pour qu'il réessaie plus tard.
     digitalWrite(LED_PIN, LOW);
-    Serial.println("Échec de la connexion. Retour en sommeil pour réessayer dans 10 minutes.");
+    Serial.println("Échec de la connexion. Retour en sommeil.");
     
-    // On libère la RAM Wi-Fi avant de dormir
     WiFi.disconnect(true);
     WiFi.mode(WIFI_OFF);
     Serial.flush();
     
-    // Il se réveillera dans 10 minutes et retentera wm.autoConnect()
+    // Auto-Recovery : se réveille dans 10 minutes pour retenter
     esp_sleep_enable_timer_wakeup(TIME_TO_SLEEP * uS_TO_S_FACTOR);
     esp_deep_sleep_start();
   }
 
-  // Si on arrive ici, c'est que l'ESP32 est connecté au Wi-Fi (soit direct, soit via le portail)
   ticker.detach();
-  digitalWrite(LED_PIN, LOW);  // Éteint la LED pour économiser la batterie
+  digitalWrite(LED_PIN, LOW);
   Serial.println("Connecté au Wi-Fi avec succès !");
 
-  // 3. Check for OTA Updates FIRST (Crucial pour pouvoir sortir du mode debug plus tard)
+  // 3. Send Data to Supabase (Envoi unique pour la production)
+  sendDataToSupabase(distance, batteryVoltage, isPluggedIn, currentVersion);
+
+  // 4. Check for OTA Updates
   checkForUpdates();
 
-  // 4. Mode Debug "Live" : Boucle de 60 secondes d'envoi continu
-  Serial.println("Début de la session d'envoi en direct (60 secondes)...");
-  unsigned long startDebugTime = millis();
-  
-  // Tourne pendant 60 000 millisecondes (1 minute)
-  while (millis() - startDebugTime < 60000) {
-    // Lecture fraîche des capteurs
-    distance = readDistance();
-    batteryVoltage = readBattery();
-    isPluggedIn = readPluginStatus();
-    
-    Serial.print("Live Distance: "); Serial.println(distance);
-    
-    // Envoi à Supabase
-    sendDataToSupabase(distance, batteryVoltage, isPluggedIn, currentVersion);
-    
-    // Pause de 1 seconde (L'envoi HTTP prend déjà ~1.5s, on aura une donnée toutes les ~2.5s)
-    delay(1000);
-  }
-  Serial.println("Fin de la session live. Préparation au sommeil...");
-
-  // 5. Return to Deep Sleep (Pour 1 minute)
+  // 5. Return to Deep Sleep
   goToDeepSleep();
 }
 
@@ -155,45 +113,38 @@ void loop() {
 }
 
 // ========================================================
-// NOUVEAUTÉ V14 : Filtre Médian pour la Distance
+// Filtre Médian pour la Distance
 // ========================================================
 float readDistance() {
   float readings[3];
   int validCount = 0;
   
-  // Prendre 3 lectures très rapides (espacées de 50ms)
   for (int i = 0; i < 3; i++) {
     VL53L0X_RangingMeasurementData_t measure;
     lox.rangingTest(&measure, false); 
     
-    // Si la lecture est valide (RangeStatus != 4)
     if (measure.RangeStatus != 4) {
-      readings[validCount] = measure.RangeMilliMeter / 10.0; // Conversion en cm
+      readings[validCount] = measure.RangeMilliMeter / 10.0;
       validCount++;
     }
     delay(50); 
   }
 
-  // Si on n'a réussi aucune lecture valide
   if (validCount == 0) return 999.0;
 
-  // Si on a 1 ou 2 lectures valides, on fait juste la moyenne simple
   if (validCount < 3) {
     float sum = 0;
     for (int i = 0; i < validCount; i++) sum += readings[i];
     return sum / validCount;
   }
 
-  // Si on a 3 lectures valides, on calcule l'écart max
   float diff1 = abs(readings[0] - readings[1]);
   float diff2 = abs(readings[1] - readings[2]);
   float diff3 = abs(readings[0] - readings[2]);
   
-  // Tolérance de 1.5 cm
   if (max(diff1, max(diff2, diff3)) <= 1.5) {
     return (readings[0] + readings[1] + readings[2]) / 3.0;
   } else {
-    // Écart trop grand (anomalie). On trie et on prend la médiane.
     for(int i=0; i<2; i++) {
       for(int j=i+1; j<3; j++) {
         if(readings[i] > readings[j]) {
@@ -203,27 +154,23 @@ float readDistance() {
         }
       }
     }
-    return readings[1]; // Retourne la valeur médiane
+    return readings[1];
   }
 }
 
 // ========================================================
-// NOUVEAUTÉ V14 : Filtre Médian + Calibration pour la Batterie
+// Filtre Médian + Calibration pour la Batterie
 // ========================================================
 float readBattery() {
   float voltageReadings[3];
   
-  // Prendre 3 lectures rapides de l'ADC
   for (int i = 0; i < 3; i++) {
     int rawADC = analogRead(batteryPin);
     float pinVoltage = (rawADC / 4095.0) * REF_VOLTAGE;
-    
-    // Appliquer le multiplicateur du pont diviseur ET l'offset de calibration
     voltageReadings[i] = (pinVoltage * VOLTAGE_DIVIDER_MULTIPLIER) + VOLTAGE_CALIBRATION_OFFSET;
     delay(10); 
   }
 
-  // Trier les 3 valeurs pour trouver la médiane (Filtre pour éliminer le bruit électrique)
   for(int i=0; i<2; i++) {
     for(int j=i+1; j<3; j++) {
       if(voltageReadings[i] > voltageReadings[j]) {
@@ -234,15 +181,10 @@ float readBattery() {
     }
   }
   
-  // Retourner la valeur médiane
   return voltageReadings[1];
 }
 
 bool readPluginStatus() {
-  // Lit la tension sur la broche 34. 
-  // Avec un diviseur de tension 10k/10k, 5V (USB branché) donne 2.5V.
-  // L'ADC (0-4095) lira environ 3100 pour 2.5V.
-  // On met un seuil de sécurité à 1000 pour détecter la présence de tension.
   int rawADC = analogRead(pluginPin);
   return (rawADC > 1000); 
 }
@@ -258,7 +200,6 @@ void sendDataToSupabase(float distance, float battery, bool isPlugged, int versi
   http.addHeader("apikey", supabaseAnonKey);
   http.addHeader("Authorization", String("Bearer ") + String(supabaseAnonKey));
 
-  // Ajout du booléen is_plugged au payload JSON
   String jsonPayload = "{\"distance\":" + String(distance, 2) + 
                        ",\"battery_voltage\":" + String(battery, 2) + 
                        ",\"is_plugged\":" + (isPlugged ? "true" : "false") + 
@@ -302,7 +243,7 @@ void checkForUpdates() {
 
 void goToDeepSleep() {
   Serial.println("Going to sleep...");
-  digitalWrite(LED_PIN, LOW);  // Sécurité supplémentaire pour l'énergie
+  digitalWrite(LED_PIN, LOW); 
   WiFi.disconnect(true);
   WiFi.mode(WIFI_OFF);
   esp_sleep_enable_timer_wakeup(TIME_TO_SLEEP * uS_TO_S_FACTOR);
