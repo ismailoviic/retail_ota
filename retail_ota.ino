@@ -22,7 +22,7 @@ const char* supabaseAnonKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJz
 const String versionUrl = "https://raw.githubusercontent.com/ismailoviic/retail_ota/main/version.txt";
 const String firmwareUrl = "https://raw.githubusercontent.com/ismailoviic/retail_ota/main/build/esp32.esp32.esp32/retail_ota.ino.bin";
 
-int currentVersion = 17; // VERSION DE PRODUCTION FINALE (V17)
+int currentVersion = 19; // VERSION DE PRODUCTION FINALE (V17)
 
 // --- Objects ---
 Adafruit_VL53L0X lox = Adafruit_VL53L0X();
