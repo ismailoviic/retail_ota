@@ -22,7 +22,7 @@ const char* supabaseAnonKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJz
 const String versionUrl = "https://raw.githubusercontent.com/ismailoviic/retail_ota/main/version.txt";
 const String firmwareUrl = "https://raw.githubusercontent.com/ismailoviic/retail_ota/main/build/esp32.esp32.esp32/retail_ota.ino.bin";
 
-int currentVersion = 19; // VERSION DE PRODUCTION FINALE (V17)
+int currentVersion = 20; // VERSION DE PRODUCTION FINALE (V20)
 
 // --- Objects ---
 Adafruit_VL53L0X lox = Adafruit_VL53L0X();
@@ -31,10 +31,6 @@ Ticker ticker;
 // --- Deep Sleep Settings ---
 #define uS_TO_S_FACTOR 1000000ULL
 #define TIME_TO_SLEEP 600  // PRODUCTION MODE : 600 secondes (10 minutes) de sommeil
-
-// --- Variables de timing ---
-unsigned long lastReadTime = 0;
-const unsigned long READ_INTERVAL = 1000; // 1 seconde
 
 // --- Fonctions pour la LED ---
 void tick() {
@@ -47,14 +43,6 @@ void configModeCallback(WiFiManager* myWiFiManager) {
   digitalWrite(LED_PIN, HIGH);
 }
 
-// Déclarations de fonctions
-float readDistance();
-float readBattery();
-bool readPluginStatus();
-void sendDataToSupabase(float distance, float battery, bool isPlugged, int version);
-void checkForUpdates();
-void goToDeepSleep();
-
 void setup() {
   Serial.begin(115200);
   delay(100);
@@ -63,7 +51,7 @@ void setup() {
   pinMode(LED_PIN, OUTPUT);
   pinMode(pluginPin, INPUT); 
 
-  Serial.println("\n--- Waking up ---");
+  Serial.println("\n--- Waking up from Deep Sleep ---");
 
   ticker.attach(0.2, tick);
   analogReadResolution(12);
@@ -75,7 +63,17 @@ void setup() {
     Serial.println(F("VL53L0X successfully initialized."));
   }
 
-  // Gestion Intelligente du Wi-Fi (WiFiManager)
+  // 1. Read Sensors & Status (Avec Filtre Médian)
+  float distance = readDistance();
+  Serial.print("distance: "); Serial.println(distance);
+  
+  float batteryVoltage = readBattery();
+  Serial.print("batteryVoltage: "); Serial.println(batteryVoltage);
+
+  bool isPluggedIn = readPluginStatus();
+  Serial.print("isPluggedIn: "); Serial.println(isPluggedIn ? "Yes" : "No");
+
+  // 2. Gestion Intelligente du Wi-Fi (WiFiManager)
   WiFiManager wm;
   wm.setDebugOutput(false);
   wm.setConnectTimeout(15);
@@ -100,42 +98,18 @@ void setup() {
   digitalWrite(LED_PIN, LOW);
   Serial.println("Connecté au Wi-Fi avec succès !");
 
-  // Vérification des mises à jour OTA au démarrage
+  // 3. Send Data to Supabase (Envoi unique pour la production)
+  sendDataToSupabase(distance, batteryVoltage, isPluggedIn, currentVersion);
+
+  // 4. Check for OTA Updates
   checkForUpdates();
+
+  // 5. Return to Deep Sleep
+  goToDeepSleep();
 }
 
 void loop() {
-  bool isPluggedIn = readPluginStatus();
-
-  // Si l'appareil est sur batterie, on lit, on envoie, et on dort.
-  if (!isPluggedIn) {
-    Serial.println("Mode Batterie: Lecture unique puis Deep Sleep.");
-    float distance = readDistance();
-    float batteryVoltage = readBattery();
-    
-    Serial.print("distance: "); Serial.println(distance);
-    Serial.print("batteryVoltage: "); Serial.println(batteryVoltage);
-    Serial.println("isPluggedIn: No");
-
-    sendDataToSupabase(distance, batteryVoltage, isPluggedIn, currentVersion);
-    goToDeepSleep();
-  } 
-  // Si l'appareil est branché, on lit et on envoie toutes les secondes.
-  else {
-    if (millis() - lastReadTime >= READ_INTERVAL || lastReadTime == 0) {
-      lastReadTime = millis();
-      
-      float distance = readDistance();
-      float batteryVoltage = readBattery();
-      
-      Serial.println("Mode Branché: Lecture en continue...");
-      Serial.print("distance: "); Serial.println(distance);
-      Serial.print("batteryVoltage: "); Serial.println(batteryVoltage);
-      Serial.println("isPluggedIn: Yes");
-
-      sendDataToSupabase(distance, batteryVoltage, isPluggedIn, currentVersion);
-    }
-  }
+  // Empty for deep sleep
 }
 
 // ========================================================
