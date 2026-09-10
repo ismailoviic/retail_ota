@@ -1,10 +1,16 @@
 /*
- AI Coffee ESP32-C3 -- firmware 22, continuous diagnostic test.
+ AI Coffee ESP32-C3 -- firmware 23, continuous diagnostic test.
  Target: same Arduino-ESP32 3.x and libraries as working firmware 21.
  No deep sleep. Five-sample median batch + ADC readings + one Supabase POST
  target every 2000 ms, measured start-to-start. Blocking sensor/network work
  can exceed this interval; log overruns and skip missed slots (no bursts).
- OTA check once at boot; successful OTA still installs and reboots.
+ OTA check at boot and every 5 minutes online; measurements pause during checks.
+ Successful OTA installs and reboots. Existing main-branch layout retained:
+ version.txt at repository root; application at
+ build/esp32.esp32.esp32c3/retail_ota.ino.bin.
+ Save this sketch as retail_ota.ino in your existing retail_ota folder, export
+ the C3 application binary, publish it, then set root version.txt to 23.
+ Upload this revision once over USB to replace v21 with incorrect OTA URLs.
  Runs until you stop/power off/reflash; no automatic 45-minute cutoff.
 
  CURRENT BREADBOARD (no electronics changes):
@@ -13,11 +19,14 @@
  External USB INPUT 5V -> 10k -> GPIO1 -> 10k -> GND (multiplier 2).
  USB ADC is near its measurement ceiling at 5V: presence only, not precise
  USB-voltage measurement. Match these constants if actual resistors differ.
- Optional external active-high LED GPIO7; set LED_PIN=-1 if absent.
+ Built-in active-low LED GPIO8 (LOW=ON), for the user-described Super Mini.
+ GPIO8 is a strapping pin: no additional external pull-down or wiring added.
+ Connecting: blink (10 s timeout); portal: solid; POST/OTA: fast blink; idle: off.
+ Upload failure: three flashes. Offline: slow blink. No sleep in this test build.
 
  Distance remains cm, 999=unavailable; battery is volts, not calibrated SOC.
  is_plugged means external supply present, not active charging.
- Same four database fields; firmware_version=22 identifies diagnostic rows.
+ Same four database fields; firmware_version=23 identifies diagnostic rows.
  Existing Supabase anon key and OTA URLs retained. TLS setInsecure retained
  from v21; server authentication is not implemented. Never use service_role.
  Failed/offline uploads are counted and dropped; no automatic POST retries.
@@ -40,6 +49,7 @@
 #include <esp_err.h>
 #include <driver/gpio.h>
 #include <limits.h>
+#include <esp_ota_ops.h>
 
 #if !defined(CONFIG_IDF_TARGET_ESP32C3)
 #error "Select an ESP32-C3 board. This sketch is for ESP32-C3 only."
@@ -59,14 +69,17 @@ constexpr int RANGE_MIN_VALID_SAMPLES = 3;
 // Broad screening bounds, NOT calibrated hopper full/empty distances.
 constexpr uint16_t RANGE_MIN_MM = 20;
 constexpr uint16_t RANGE_MAX_MM = 2000;
-constexpr int LED_PIN = 7; // EXTERNAL active-high LED; -1 disables it
+constexpr int LED_PIN = 8; // Built-in active-low LED; -1 disables it
+constexpr bool LED_ACTIVE_LOW = true;
 constexpr uint32_t SAMPLE_INTERVAL_MS = 2000;
 constexpr uint32_t WIFI_RETRY_INTERVAL_MS = 10000;
 constexpr bool CHECK_OTA_AT_BOOT = true;
-constexpr int CURRENT_VERSION = 22;
+constexpr uint32_t OTA_CHECK_INTERVAL_MS = 300000;
+uint32_t lastOTACheckAt = 0;
+constexpr int CURRENT_VERSION = 23;
 constexpr wifi_power_t WIFI_TX_POWER = WIFI_POWER_8_5dBm;
 constexpr int8_t WIFI_TX_POWER_QUARTER_DBM = 34; // 8.5 dBm
-constexpr unsigned long WIFI_CONNECT_TIMEOUT_SECONDS = 30;
+constexpr unsigned long WIFI_CONNECT_TIMEOUT_SECONDS = 10;
 constexpr unsigned long PORTAL_TIMEOUT_SECONDS = 300;
 // Set true only to deliberately reopen setup even with saved credentials.
 constexpr bool FORCE_CONFIG_PORTAL = false;
@@ -83,9 +96,9 @@ const char* SUPABASE_URL =
   "https://yvgsorxwofgpkshlczlm.supabase.co/rest/v1/sensor_data";
 const char* SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inl2Z3Nvcnh3b2ZncGtzaGxjemxtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODIxOTc2ODgsImV4cCI6MjA5Nzc3MzY4OH0.MgrGm-zTR5DIv2rwmBH0S3rMEDUHA_0ol-Ej43lHBk8";
 const char* VERSION_URL =
-  "https://raw.githubusercontent.com/ismailoviic/retail_ota/main/firmware/esp32c3/version.txt";
+  "https://raw.githubusercontent.com/ismailoviic/retail_ota/main/version.txt";
 const char* FIRMWARE_URL =
-  "https://raw.githubusercontent.com/ismailoviic/retail_ota/main/firmware/esp32c3/coffee_c3.bin";
+  "https://raw.githubusercontent.com/ismailoviic/retail_ota/main/build/esp32.esp32.esp32c3/retail_ota.ino.bin";
 
 Adafruit_VL53L0X lox;
 Ticker ticker;
@@ -140,11 +153,30 @@ bool applyWiFiPower(const char* stage) {
 }
 
 void setLed(bool on) {
-  if (LED_PIN >= 0) digitalWrite(LED_PIN, on ? HIGH : LOW);
+  if (LED_PIN >= 0) digitalWrite(LED_PIN, (on != LED_ACTIVE_LOW) ? HIGH : LOW);
 }
 
 void tick() {
   if (LED_PIN >= 0) digitalWrite(LED_PIN, !digitalRead(LED_PIN));
+}
+
+void stopLedBlink() {
+  ticker.detach();
+  setLed(false);
+}
+
+void startLedBlink(float seconds) {
+  ticker.detach();
+  setLed(true);
+  if (LED_PIN >= 0) ticker.attach(seconds, tick);
+}
+
+void flashUploadError() {
+  stopLedBlink();
+  for (int i = 0; i < 3; ++i) {
+    setLed(true); delay(70);
+    setLed(false); delay(70);
+  }
 }
 
 void stopOnWiFiPowerError() {
@@ -283,55 +315,118 @@ bool sendDataToSupabase(float distance, float battery, bool plugged) {
   return code >= 200 && code < 300;
 }
 
+void printOTAPartitions() {
+  const esp_partition_t* running = esp_ota_get_running_partition();
+  const esp_partition_t* target = esp_ota_get_next_update_partition(nullptr);
+  Serial.printf("[OTA] Running firmware=%d; build=%s %s; sketch=%lu bytes\n",
+                CURRENT_VERSION, __DATE__, __TIME__, (unsigned long)ESP.getSketchSize());
+  if (running) Serial.printf("[OTA] Running partition=%s size=%lu\n",
+                            running->label, (unsigned long)running->size);
+  if (target) Serial.printf("[OTA] Next partition=%s size=%lu\n",
+                           target->label, (unsigned long)target->size);
+  else Serial.println("[OTA] NO update partition. USB flash with an OTA-capable partition scheme.");
+}
+
 int fetchLatestVersion() {
   WiFiClientSecure client;
-  client.setInsecure(); // Migration compatibility: see security note above
+  client.setInsecure(); // Existing v21 behavior; does not authenticate the server
   client.setHandshakeTimeout(15);
   HTTPClient http;
   http.setConnectTimeout(15000);
   http.setTimeout(15000);
   http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
-  if (!http.begin(client, VERSION_URL)) return -1;
-  int code = http.GET();
-  String value;
-  if (code == HTTP_CODE_OK) value = http.getString();
-  http.end(); // Release HTTP connection before opening firmware download
-  if (code != HTTP_CODE_OK) {
-    Serial.printf("C3 version check failed: %d; continuing with readings.\n", code);
+  String url = String(VERSION_URL) + "?check=" + String((unsigned long)esp_random());
+  Serial.printf("[OTA] Version URL: %s\n", VERSION_URL);
+  if (!http.begin(client, url)) {
+    Serial.println("[OTA] Version HTTP initialization failed.");
     return -1;
   }
-  value.trim();
-  if (value.isEmpty() || value.length() > 9) return -1;
-  for (unsigned int i = 0; i < value.length(); ++i) {
-    if (value[i] < '0' || value[i] > '9') return -1;
+  http.addHeader("Cache-Control", "no-cache");
+  int code = http.GET();
+  Serial.printf("[OTA] Version HTTP status=%d\n", code);
+  if (code != HTTP_CODE_OK) {
+    if (code < 0) Serial.println(http.errorToString(code));
+    if (code == 404) Serial.println("[OTA] Check main branch/path and public raw-file access.");
+    http.end();
+    return -1;
   }
-  long version = value.toInt();
-  return version > 0 && version <= INT_MAX ? (int)version : -1;
+  String value = http.getString();
+  http.end();
+  // Accept an optional UTF-8 BOM and surrounding whitespace, but no v-prefix.
+  if (value.startsWith("\xEF\xBB\xBF")) value.remove(0, 3);
+  value.trim();
+  if (value.isEmpty() || value.length() > 9) {
+    Serial.println("[OTA] Invalid version.txt: must contain only a positive integer, e.g. 23.");
+    return -1;
+  }
+  for (unsigned int i = 0; i < value.length(); ++i) {
+    if (value[i] < '0' || value[i] > '9') {
+      Serial.println("[OTA] Invalid version.txt: use 23, not v23, JSON, or HTML.");
+      return -1;
+    }
+  }
+  int latest = value.toInt();
+  if (latest <= 0) return -1;
+  Serial.printf("[OTA] Installed=%d; published=%d\n", CURRENT_VERSION, latest);
+  return latest;
+}
+
+void onOTAProgress(int current, int total) {
+  static int lastPercent = -1;
+  int percent = total > 0 ? (int)((int64_t)current * 100 / total) : 0;
+  if (percent / 10 != lastPercent / 10 || current == total || current == 0) {
+    Serial.printf("[OTA] Download: %d/%d bytes (%d%%)\n", current, total, percent);
+    lastPercent = percent;
+  }
 }
 
 void checkForUpdates() {
-  Serial.println("Checking ESP32-C3 firmware channel...");
-  int latest = fetchLatestVersion();
-  if (latest <= CURRENT_VERSION) {
-    if (latest > 0) Serial.println("No newer C3 firmware.");
+  lastOTACheckAt = millis();
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("[OTA] Skipped: Wi-Fi disconnected.");
     return;
   }
-  Serial.printf("Updating firmware %d -> %d\n", CURRENT_VERSION, latest);
+  Serial.println("[OTA] Checking channel; sampling temporarily paused.");
+  printOTAPartitions();
+  startLedBlink(0.10f);
+  int latest = fetchLatestVersion();
+  if (latest <= CURRENT_VERSION) {
+    if (latest > 0) Serial.println("[OTA] No higher version published; continuing current firmware.");
+    else Serial.println("[OTA] Version check failed; continuing measurements, retry in 5 minutes.");
+    stopLedBlink();
+    return;
+  }
+  const esp_partition_t* target = esp_ota_get_next_update_partition(nullptr);
+  if (!target) {
+    Serial.println("[OTA] Cannot install: no OTA slot. Use USB and an OTA-capable partition scheme.");
+    stopLedBlink();
+    return;
+  }
+  Serial.printf("[OTA] Download firmware %d -> %d from %s\n", CURRENT_VERSION, latest, FIRMWARE_URL);
+  Serial.println("[OTA] File must be compiled ESP32-C3 application BIN, not source/merged/bootloader BIN.");
   WiFiClientSecure client;
-  client.setInsecure(); // Migration compatibility: see security note above
+  client.setInsecure();
   client.setHandshakeTimeout(15);
+  String binaryURL = String(FIRMWARE_URL) + "?version=" + String(latest)
+                   + "&check=" + String((unsigned long)esp_random());
   httpUpdate.rebootOnUpdate(false);
-  t_httpUpdate_return result = httpUpdate.update(client, FIRMWARE_URL);
+  httpUpdate.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
+  httpUpdate.onProgress(onOTAProgress);
+  t_httpUpdate_return result = httpUpdate.update(client, binaryURL);
+  stopLedBlink();
   if (result == HTTP_UPDATE_OK) {
-    Serial.println("OTA succeeded; rebooting.");
+    Serial.println("[OTA] Install succeeded; rebooting. Verify NEW boot version matches version.txt.");
     Serial.flush();
     ESP.restart();
   } else if (result == HTTP_UPDATE_FAILED) {
-    Serial.printf("OTA failed (%d): %s\n", httpUpdate.getLastError(),
+    Serial.printf("[OTA] FAILED error=%d: %s\n", httpUpdate.getLastError(),
                   httpUpdate.getLastErrorString().c_str());
+    Serial.println("[OTA] Retaining running firmware. Check binary URL, C3 target, file size, OTA slot.");
+    flashUploadError();
   } else {
-    Serial.println("OTA server returned no update.");
+    Serial.println("[OTA] Server returned no update despite higher manifest version.");
   }
+  lastOTACheckAt = millis();
 }
 
 bool initializeSensor() {
@@ -357,14 +452,16 @@ void setup() {
   delay(1000);
   Serial.printf("\nAI Coffee ESP32-C3 firmware %d -- CONTINUOUS TEST\n", CURRENT_VERSION);
   Serial.printf("Reset reason: %d\n", (int)esp_reset_reason());
+  setLed(false); // Preload HIGH before enabling active-low output
   if (LED_PIN >= 0) pinMode(LED_PIN, OUTPUT);
   setLed(false);
+  printOTAPartitions();
   pinMode(BATTERY_PIN, INPUT);
   pinMode(PLUGIN_PIN, INPUT);
   analogReadResolution(12);
   analogSetPinAttenuation(BATTERY_PIN, ADC_11db);
   analogSetPinAttenuation(PLUGIN_PIN, ADC_11db);
-  if (LED_PIN >= 0) ticker.attach(0.2, tick);
+  startLedBlink(0.2f);
 
   WiFi.onEvent(onWiFiEvent);
   if (!WiFi.mode(WIFI_STA) || !applyWiFiPower("before connection")) {
@@ -400,6 +497,7 @@ void setup() {
   Wire.setClock(100000);
   Wire.setTimeOut(100);
   initializeSensor();
+  if (!previouslyConnected) startLedBlink(0.5f);
   lastWiFiRetryAt = millis();
   nextSampleAt = millis();
   Serial.println("Test started: 2000 ms target, no deep sleep; stop manually.");
@@ -407,16 +505,25 @@ void setup() {
 
 void loop() {
   bool connected = WiFi.status() == WL_CONNECTED;
+  if (!connected && previouslyConnected) startLedBlink(0.5f);
   if (connected && !previouslyConnected) {
+    stopLedBlink();
     if (!applyWiFiPower("reconnected")) stopOnWiFiPowerError();
     Serial.print("Reconnected; IP: ");
     Serial.println(WiFi.localIP());
+    // Check immediately on recovery, including boot with no Wi-Fi.
+    checkForUpdates();
+    nextSampleAt = millis();
   }
   previouslyConnected = connected;
   if (!connected && (uint32_t)(millis() - lastWiFiRetryAt) >= WIFI_RETRY_INTERVAL_MS) {
     lastWiFiRetryAt = millis();
     Serial.println("Retrying saved Wi-Fi connection...");
     WiFi.reconnect();
+  }
+  if (connected && (uint32_t)(millis() - lastOTACheckAt) >= OTA_CHECK_INTERVAL_MS) {
+    checkForUpdates();
+    nextSampleAt = millis(); // Resume without a catch-up burst after OTA
   }
   if ((int32_t)(millis() - nextSampleAt) < 0) {
     delay(2);
@@ -438,8 +545,12 @@ void loop() {
   uint32_t uploadStartedAt = millis();
   if (WiFi.status() == WL_CONNECTED) {
     Serial.printf("Wi-Fi RSSI: %ld dBm\n", (long)WiFi.RSSI());
-    if (sendDataToSupabase(distance, battery, plugged)) ++uploadsOK;
-    else ++uploadsFailed;
+    startLedBlink(0.10f);
+    bool sent = sendDataToSupabase(distance, battery, plugged);
+    stopLedBlink();
+    if (sent) ++uploadsOK;
+    else { ++uploadsFailed; flashUploadError(); }
+    if (WiFi.status() != WL_CONNECTED) startLedBlink(0.5f);
   } else {
     ++offlineSkipped;
     Serial.println("Offline: measurement logged locally; upload skipped (not queued).");
