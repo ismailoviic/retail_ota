@@ -4,7 +4,7 @@
   "compiler.optimization_flags": "-Os",
   "customBuildProperties": "",
   "fqbn": "esp32:esp32:esp32c3:UploadSpeed=921600,CDCOnBoot=cdc,CPUFreq=160,FlashFreq=80,FlashMode=qio,FlashSize=4M,PartitionScheme=default,DebugLevel=none,EraseFlash=none,JTAGAdapter=default,ZigbeeMode=default",
-  "hardwareFolders": "/Users/ismailessabbagh/Library/Arduino15/packages/esp32/hardware/esp32/3.3.10,/Users/ismailessabbagh/Library/Arduino15/packages/esp32/hardware/esp32/3.3.10",
+  "hardwareFolders": "/Users/ismailessabbagh/Library/Arduino15/packages/esp32/hardware/esp32/3.3.11,/Users/ismailessabbagh/Library/Arduino15/packages/esp32/hardware/esp32/3.3.11",
   "otherLibrariesFolders": "/Users/ismailessabbagh/Documents/Arduino/libraries",
   "sketchLocation": "/Users/ismailessabbagh/Documents/Projects/Retail iot/coffee device/retail_ota"
 }
