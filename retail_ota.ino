@@ -1,5 +1,5 @@
 /*
-  AI Coffee — ESP32-C3 — Firmware 24
+  AI Coffee — ESP32-C3 — Firmware 25
 
   Normal operation:
   1. Wake and initialize.
@@ -63,7 +63,7 @@
 // Firmware and timing
 // --------------------------------------------------
 
-constexpr int CURRENT_VERSION = 24;
+constexpr int CURRENT_VERSION = 25;
 constexpr uint64_t SLEEP_SECONDS = 600;
 constexpr uint64_t US_PER_SECOND = 1000000ULL;
 
@@ -129,8 +129,7 @@ constexpr int8_t WIFI_TX_POWER_QUARTER_DBM = 34;
 const char* SUPABASE_URL =
   "https://yvgsorxwofgpkshlczlm.supabase.co/rest/v1/sensor_data";
 
-const char* SUPABASE_ANON_KEY =
-  "PASTE_YOUR_EXISTING_SUPABASE_ANON_KEY_HERE";
+const char* SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inl2Z3Nvcnh3b2ZncGtzaGxjemxtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODIxOTc2ODgsImV4cCI6MjA5Nzc3MzY4OH0.MgrGm-zTR5DIv2rwmBH0S3rMEDUHA_0ol-Ej43lHBk8";
 
 // --------------------------------------------------
 // OTA — existing repository paths
@@ -727,7 +726,7 @@ int fetchLatestVersion() {
 
   for (unsigned int i = 0; i < value.length(); ++i) {
     if (value[i] < '0' || value[i] > '9') {
-      Serial.println("[OTA] Use 24, not v24, JSON, or HTML.");
+      Serial.println("[OTA] Use 25, not v25, JSON, or HTML.");
       return -1;
     }
   }
