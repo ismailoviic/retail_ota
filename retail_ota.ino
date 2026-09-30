@@ -45,7 +45,7 @@
 // Firmware and timing
 // --------------------------------------------------
 
-constexpr int CURRENT_VERSION = 27;
+constexpr int CURRENT_VERSION = 28;
 // Used only on FIRST provisioning. Subsequent OTA firmware keeps the stored ID.
 // Before first use on another ESP, register it and replace this initial UUID.
 const char* INITIAL_DEVICE_ID = "4f974379-a444-4c50-8cca-175d7803ceda";  // "e2a880ac-c44f-4708-b315-9b6a3eab727a";  //=> the comment is the test device ID version 26
@@ -693,7 +693,7 @@ bool sendDataToSupabase(float distance, float battery, bool plugged) {
   payload = String("{\"distance\":") + String(distance, 2)
             + ",\"battery_voltage\":" + String(battery, 3)
             + ",\"is_plugged\":" + (plugged ? "true" : "false")
-            + ",\"firmware_version\":26"
+            + ",\"firmware_version\":" + String(CURRENT_VERSION)
             + ",\"device_id\":\"" + deviceId + "\""
             + ",\"reading_id\":\"" + readingId + "\""
             + ",\"session_id\":\"" + retained.session + "\"";
