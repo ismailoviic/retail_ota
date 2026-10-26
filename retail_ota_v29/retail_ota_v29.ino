@@ -1,6 +1,8 @@
 /*
- AI Coffee V4 / ESP32-C3 / firmware 29
+ AI Coffee V4 / ESP32-C3 / firmware 30
  Power-optimized revision of retail_ota firmware 28; pins, ADC ratios and OTA paths retained.
+ Firmware 30 = 29 with the sigma cut at the sensor's 18 mm limit and I2C back at 100 kHz:
+ on the deployed board 29 accepted only 2 of 10 samples and reported no distance.
  Readings are published over MQTT instead of the Supabase REST API.
  Device UUID provisioned from the user's successful database migration.
 
@@ -32,7 +34,7 @@
  - Battery/USB ADC read before the radio starts; Wi-Fi associates while the VL53L0X ranges.
  - NTP only after power-on or every 2 h; the system clock keeps running in deep sleep.
  - Wi-Fi backoff: after 3 failed timer wakes, one attempt per hour until it recovers.
- - Timer wakes: no 300 ms serial delay, no LED. I2C at 400 kHz; no fixed sample delays.
+ - Timer wakes: no 300 ms serial delay, no LED. No fixed sample delays.
  - Refill-aware schedule (replaces 600/300/60 s by fill level): 4 h after a refill, 1 h
    while >= 30 %, 5 min below 30 %, 1 h overnight (21:00-06:00 UTC) when the level is stable.
    Replayed on 14-25 Oct data: 37 wakes/day instead of 144; refills seen within 5 min,

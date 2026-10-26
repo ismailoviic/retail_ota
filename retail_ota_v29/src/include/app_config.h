@@ -36,7 +36,7 @@
 // Firmware and timing
 // --------------------------------------------------
 
-constexpr int CURRENT_VERSION = 29;
+constexpr int CURRENT_VERSION = 30;
 // Used only on FIRST provisioning. Subsequent OTA firmware keeps the stored ID.
 // Before first use on another ESP, register it and replace this initial UUID.
 constexpr const char* INITIAL_DEVICE_ID = "4f974379-a444-4c50-8cca-175d7803ceda";  // "e2a880ac-c44f-4708-b315-9b6a3eab727a";  //=> the comment is the test device ID version 26
@@ -119,17 +119,18 @@ constexpr int RANGE_MIN_VALID_SAMPLES = 3;
 constexpr uint16_t RANGE_MIN_MM = 20;
 // The hopper is ~300 mm deep; longer returns are phase wrap or the beam passing the beans.
 constexpr uint16_t RANGE_MAX_MM = 600;
-// Per-sample sigma from the sensor; above this the return is dominated by noise.
-constexpr float RANGE_SIGMA_MAX_MM = 12.0f;
+// Per-sample sigma from the sensor; equals its own default limit (status 0 already implies it).
+// Firmware 29 used 12 mm and rejected 8 of 10 samples that v28 accepted with a 1-3 mm spread.
+constexpr float RANGE_SIGMA_MAX_MM = 18.0f;
 // Inlier window around the median: max(this, 3 x scaled MAD). Rejects a falling bean or a hand.
 constexpr float RANGE_OUTLIER_MIN_MM = 5.0f;
 // Re-measure with the longer budget when the first pass looks optically weak.
 constexpr int RANGE_ESCALATE_SPREAD_MM = 8;
-constexpr float RANGE_ESCALATE_SIGMA_MM = 6.0f;
+constexpr float RANGE_ESCALATE_SIGMA_MM = 15.0f;
 constexpr float DISTANCE_UNAVAILABLE_CM = 999.0f;
 
-// VL53L0X supports fast mode; drop to 100000 if long wires or weak pull-ups fail init.
-constexpr uint32_t I2C_CLOCK_HZ = 400000;
+// 100 kHz as in v28, proven on this wiring; 400 kHz is not verified on the deployed board.
+constexpr uint32_t I2C_CLOCK_HZ = 100000;
 
 // --------------------------------------------------
 // Current voltage dividers
